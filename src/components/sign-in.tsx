@@ -1,13 +1,11 @@
 "use client"
 import { useEffect } from "react"
 import { useFormState } from "react-dom"
-import { useRouter } from "next/navigation"
 import { loginAction, type LoginState } from "@/app/actions/auth"
  
 export function SignIn() {
   const initialState: LoginState = { success: undefined, message: null }
   const [state, formAction] = useFormState(loginAction, initialState)
-  const router = useRouter()
 
   useEffect(() => {
     if (state?.success) {
@@ -67,7 +65,7 @@ export function SignIn() {
         </button>
 
         <p className="text-sm text-gray-500 text-center">
-          Don't have an account?{" "}
+          Don&apos;t have an account?{" "}
           <a href="/signup" className="text-indigo-600 hover:underline">
             Sign Up
           </a>
