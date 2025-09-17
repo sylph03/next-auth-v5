@@ -39,6 +39,7 @@ export function SignIn() {
             id="email"
             name="email"
             type="email"
+            placeholder="Email"
             required
             className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
           />
@@ -52,6 +53,7 @@ export function SignIn() {
             id="password"
             name="password"
             type="password"
+            placeholder="Password"
             required
             className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition"
           />

@@ -74,6 +74,10 @@ async function refreshAccessToken(token: any) {
 export const { auth, signIn, signOut, handlers } = NextAuth({
   secret: process.env.AUTH_SECRET,
   session: { strategy: "jwt" },
+  pages: {
+    signIn: "/login",
+    error: "/login",
+  },
   providers: [
     CredentialsProvider({
       name: "Credentials",
@@ -147,7 +151,7 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
       }
 
       // ⏳ Nếu access token còn hạn → dùng tiếp
-      if (Date.now() < (token.accessTokenExpires ?? 0)) {
+      if (token.accessTokenExpires && Date.now() < (token.accessTokenExpires as number)) {
         return token;
       }
 
