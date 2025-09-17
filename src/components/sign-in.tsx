@@ -1,13 +1,11 @@
 "use client"
 import { useEffect } from "react"
 import { useFormState } from "react-dom"
-import { useRouter } from "next/navigation"
 import { loginAction, type LoginState } from "@/app/actions/auth"
  
 export function SignIn() {
   const initialState: LoginState = { success: undefined, message: null }
   const [state, formAction] = useFormState(loginAction, initialState)
-  const router = useRouter()
 
   useEffect(() => {
     if (state?.success) {
