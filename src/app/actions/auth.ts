@@ -1,55 +1,75 @@
 "use server";
+
 import { signIn, signOut } from "@/auth";
 import { AuthError } from "next-auth";
+import { signInSchema } from "@/lib/zod";
+import { User } from "@/types/next-auth";
 
-export type LoginState = {
+export interface LoginState {
   success?: boolean;
   message?: string | null;
-  data?: any;
-};
+  data?: User | null;
+}
 
-export async function loginAction(_: LoginState, formData: FormData): Promise<LoginState> {
+export async function loginAction(
+  _: LoginState,
+  formData: FormData
+): Promise<LoginState> {
   try {
-    // Tắt redirect để trả state cho UI và kiểm tra lỗi từ NextAuth
+    // Validate input
+    const parsed = signInSchema.safeParse({
+      email: formData.get("email"),
+      password: formData.get("password"),
+    });
+
+    if (!parsed.success) {
+      const message = parsed.error.issues.map((err) => err.message).join(", ");
+      return { success: false, message };
+    }
+
+    const { email, password } = parsed.data;
+
+    // Attempt login
     const result = await signIn("credentials", {
-      email: formData.get("email") as string,
-      password: formData.get("password") as string,
+      email,
+      password,
       redirect: false,
     });
-    
+
     if (result?.error) {
-      // Map lỗi NextAuth rõ ràng hơn
-      if (typeof result.error === "string" && result.error.includes("CredentialsSignin")) {
-        return { success: false, message: "Email hoặc mật khẩu không đúng" };
-      }
-      return { success: false, message: result.error };
+      const isCredentialsError = typeof result.error === "string" && 
+        result.error.includes("CredentialsSignin");
+      
+      return { 
+        success: false, 
+        message: isCredentialsError 
+          ? "Email hoặc mật khẩu không đúng" 
+          : result.error 
+      };
     }
-    
-    // Thành công nếu không có lỗi từ NextAuth
-    return { success: true, message: "Đăng nhập thành công" };
+
+    return { success: true, message: "Đăng nhập thành công", data: result };
   } catch (error) {
-    console.error("[loginAction] error", error);
-    
-    // NEXT_REDIRECT là lỗi điều hướng nội bộ của Next khi signIn muốn redirect
-    const digest = (error as any)?.digest as string | undefined;
-    if (digest && digest.startsWith("NEXT_REDIRECT")) {
+    // Handle Next.js redirect
+    const digest = (error as Error & { digest?: string })?.digest;
+    if (digest?.startsWith("NEXT_REDIRECT")) {
       return { success: true, message: "Đăng nhập thành công" };
     }
-    
+
+    // Handle auth errors
     if (error instanceof AuthError) {
       return { success: false, message: "Email hoặc mật khẩu không đúng" };
     }
-    
-    const message = (error as any)?.message || "Đăng nhập thất bại";
-    return { success: false, message };
+
+    // Handle other errors
+    return { 
+      success: false, 
+      message: (error as Error)?.message || "Đăng nhập thất bại" 
+    };
   }
 }
 
 export async function logoutAction() {
   "use server";
-  await (signOut as any)({ redirect: false });
-  const { redirect } = await import("next/navigation");
-  redirect("/");
+  await signOut({ redirectTo: "/" });
 }
-
-

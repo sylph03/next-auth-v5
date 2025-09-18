@@ -1,10 +1,14 @@
 import NextAuth from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { jwtDecode, JwtPayload } from "jwt-decode";
+import { ZodError } from "zod";
+import { signInSchema } from './lib/zod';
+import { User, TokenData, ApiResponse } from './types/next-auth';
+import { env } from './lib/env';
 
-async function refreshAccessToken(token: any) {
+async function refreshAccessToken(token: TokenData) {
   try {
-    const res = await fetch(`${process.env.API_URL}/auth/refresh`, {
+    const res = await fetch(`${env.API_URL}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -13,9 +17,6 @@ async function refreshAccessToken(token: any) {
     });
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      console.error(`❌ Refresh failed ${res.status}:`, text);
-
       if (res.status === 401 || res.status === 400) {
         return {
           ...token,
@@ -27,26 +28,27 @@ async function refreshAccessToken(token: any) {
           error: "RefreshTokenInvalid",
         };
       }
-      throw new Error(`Failed to refresh token: ${res.status} ${text}`);
+      throw new Error(`Token refresh failed: ${res.status}`);
     }
 
-    const response = await res.json();
+    const response: ApiResponse = await res.json();
 
     if (!response?.token?.accessToken) {
       throw new Error("Invalid refresh response: missing accessToken");
     }
 
-    // 🔑 decode accessToken mới → tính lifetime
+    // Calculate token expiration
     let accessTokenExpires = 0;
     try {
       const decoded = jwtDecode<Required<JwtPayload>>(response.token.accessToken);
       const lifeTime = decoded.exp - decoded.iat;
       accessTokenExpires = Date.now() + lifeTime * 1000;
-    } catch (e) {
-      console.warn("⚠️ Cannot decode refreshed accessToken:", e);
+    } catch {
+      // If decode fails, set to 0 to force refresh on next request
+      accessTokenExpires = 0;
     }
 
-    const newToken = {
+    return {
       ...token,
       accessToken: response.token.accessToken,
       refreshToken: response.token.refreshToken ?? token.refreshToken,
@@ -55,15 +57,7 @@ async function refreshAccessToken(token: any) {
       accessTokenExpires,
       error: undefined,
     };
-
-    console.log(
-      "✅ New access token issued, expires at:",
-      new Date(accessTokenExpires).toISOString()
-    );
-
-    return newToken;
-  } catch (error) {
-    console.error("Refresh token error:", error);
+  } catch {
     return {
       ...token,
       error: "RefreshAccessTokenError",
@@ -72,11 +66,11 @@ async function refreshAccessToken(token: any) {
 }
 
 export const { auth, signIn, signOut, handlers } = NextAuth({
-  secret: process.env.AUTH_SECRET,
+  secret: env.AUTH_SECRET,
   session: { strategy: "jwt" },
   pages: {
-    signIn: "/login",
-    error: "/login",
+    signIn: "/dashboard",
+    error: "/",
   },
   providers: [
     CredentialsProvider({
@@ -86,49 +80,62 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
         password: { label: "Password", type: "password" },
       },
       authorize: async (credentials) => {
-        if (!credentials?.email || !credentials.password) return null;
+        try {
+          const { email, password } = await signInSchema.parseAsync(credentials)
 
-        const res = await fetch(`${process.env.API_URL}/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: credentials.email,
-            password: credentials.password,
-          }),
-        });
+          const res = await fetch(`${env.API_URL}/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email,
+              password,
+            }),
+          });
 
-        if (!res.ok) throw new Error("Invalid credentials");
+          if (!res.ok) throw new Error("Invalid credentials");
 
-        const response = await res.json();
-        if (!response.success) throw new Error(response.message);
+          const response: ApiResponse<User> = await res.json();
+          if (!response.success) throw new Error(response.message);
 
-        const user = response.data;
-        const token = response.token;
+          const user = response.data;
+          const token = response.token;
 
-        return {
-          ...(user || {}),
-          accessToken: token.accessToken,
-          refreshToken: token.refreshToken,
-          accessPayload: token.accessPayload,
-          refreshPayload: token.refreshPayload,
-        };
+          if (!user || !token) {
+            throw new Error("Invalid response: missing user or token data");
+          }
+
+          return {
+            ...user,
+            accessToken: token.accessToken,
+            refreshToken: token.refreshToken,
+            accessPayload: token.accessPayload,
+            refreshPayload: token.refreshPayload,
+          };
+        } catch (error) {
+          if (error instanceof ZodError) {
+            throw new Error(error.issues.map(e => e.message).join(", "))
+          }
+          throw error
+        }
       },
     }),
   ],
   callbacks: {
     async jwt({ token, user }) {
-      // ✅ Khi login lần đầu
+      // Initial login
       if (user) {
-        console.log("🔑 Login success, setting initial token");
-        const u: any = user;
-
+        const u = user as User;
         let accessTokenExpires = 0;
+        
         try {
-          const decoded = jwtDecode<Required<JwtPayload>>(u.accessToken);
-          const lifeTime = decoded.exp - decoded.iat;
-          accessTokenExpires = Date.now() + lifeTime * 1000;
-        } catch (e) {
-          console.warn("⚠️ Cannot decode accessToken:", e);
+          if (u.accessToken) {
+            const decoded = jwtDecode<Required<JwtPayload>>(u.accessToken);
+            const lifeTime = decoded.exp - decoded.iat;
+            accessTokenExpires = Date.now() + lifeTime * 1000;
+          }
+        } catch {
+          // If decode fails, set to 0 to force refresh on next request
+          accessTokenExpires = 0;
         }
 
         return {
@@ -145,36 +152,35 @@ export const { auth, signIn, signOut, handlers } = NextAuth({
         };
       }
 
-      // ❌ Nếu refresh token đã invalid → return luôn
+      // Return if refresh token is invalid
       if (token.error === "RefreshTokenInvalid") {
         return token;
       }
 
-      // ⏳ Nếu access token còn hạn → dùng tiếp
+      // Return if access token is still valid
       if (token.accessTokenExpires && Date.now() < (token.accessTokenExpires as number)) {
         return token;
       }
 
-      // ♻️ Nếu hết hạn → refresh
-      console.log("♻️ Access token expired, refreshing...");
+      // Refresh expired access token
       return await refreshAccessToken(token);
     },
 
     async session({ session, token }) {
-      const s: any = session;
-      s.user = {
-        id: token.id,
-        email: token.email,
-        roles: token.roles,
-        capabilities: token.capabilities,
+      return {
+        ...session,
+        user: {
+          id: (token.id as string) || '',
+          email: (token.email as string) || '',
+          name: session.user?.name,
+          image: session.user?.image,
+          roles: token.roles as string[] | undefined,
+          capabilities: token.capabilities as string[] | undefined,
+        },
+        accessToken: token.accessToken as string | undefined,
+        accessTokenExpires: token.accessTokenExpires as number | undefined,
+        error: token.error as string | undefined,
       };
-      s.accessToken = token.accessToken;
-      s.refreshToken = token.refreshToken;
-      s.accessPayload = token.accessPayload;
-      s.refreshPayload = token.refreshPayload;
-      s.error = token.error;
-      s.accessTokenExpires = token.accessTokenExpires;
-      return s;
     },
   },
 });

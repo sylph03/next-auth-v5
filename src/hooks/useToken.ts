@@ -7,7 +7,7 @@ export function useToken() {
   
   return {
     accessToken: session?.accessToken || null,
-    refreshToken: session?.refreshToken || null,
+    // refreshToken: session?.refreshToken || null,
     isAuthenticated: !!session?.accessToken,
   };
 }
